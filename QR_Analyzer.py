@@ -1,8 +1,8 @@
 import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QListWidget,
-                             QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
-                             QGraphicsView, QGraphicsScene, QGraphicsPixmapItem)
+                            QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
+                            QGraphicsView, QGraphicsScene, QGraphicsPixmapItem)
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 from pyzbar.pyzbar import decode
@@ -23,6 +23,7 @@ class ImageAnalyzer(QWidget):
         self.image_view.setScene(self.image_scene)
         self.image_pixmap_item = None
         self.image_path = None
+        self.current_pixmap = None  # Add this line to store current pixmap
 
         self.load_folder_button = QPushButton("Load Folder")
         self.load_folder_button.clicked.connect(self.load_images)
@@ -64,9 +65,9 @@ class ImageAnalyzer(QWidget):
                     self.image_list.addItem(filename)
     def display_image(self, item):
         self.image_path = self.images[self.image_list.row(item)]
-        pixmap = QPixmap(self.image_path)
+        self.current_pixmap = QPixmap(self.image_path)  # Store pixmap reference
         self.image_scene.clear()
-        self.image_pixmap_item = QGraphicsPixmapItem(pixmap)
+        self.image_pixmap_item = QGraphicsPixmapItem(self.current_pixmap)
         self.image_scene.addItem(self.image_pixmap_item)
         self.image_view.fitInView(self.image_scene.sceneRect(), Qt.KeepAspectRatio)
         self.detect_qr_button.setEnabled(True)
@@ -76,39 +77,51 @@ class ImageAnalyzer(QWidget):
         self.end_pos = None
         self.drawing = False
     def mousePressEvent(self, event):
-        if self.image_pixmap_item and self.image_pixmap_item.isUnderMouse():
+        pos = self.image_view.mapToScene(event.pos())
+        if self.image_pixmap_item and self.image_pixmap_item.contains(pos):
             self.drawing = True
-            self.start_pos = event.pos()
-            self.end_pos = event.pos()
+            self.start_pos = pos
+            self.end_pos = pos
             self.update_selection()
 
     def mouseMoveEvent(self, event):
         if self.drawing:
-            self.end_pos = event.pos()
+            self.end_pos = self.image_view.mapToScene(event.pos())
             self.update_selection()
 
     def mouseReleaseEvent(self, event):
         if self.drawing:
             self.drawing = False
-            self.end_pos = event.pos()
+            self.end_pos = self.image_view.mapToScene(event.pos())
             self.update_selection()
 
     def update_selection(self):
-        if self.start_pos and self.end_pos:
-            rect = self.image_view.mapToScene(self.start_pos).boundingRect().united(
-                self.image_view.mapToScene(self.end_pos).boundingRect())
-            self.selected_area = rect
+        if self.start_pos and self.end_pos and self.current_pixmap:
             self.image_scene.clear()
+            # Recreate pixmap item each time
+            self.image_pixmap_item = QGraphicsPixmapItem(self.current_pixmap)
             self.image_scene.addItem(self.image_pixmap_item)
-            self.image_scene.addRect(rect, pen=Qt.red)
+            
+            # Create selection rectangle
+            x = min(self.start_pos.x(), self.end_pos.x())
+            y = min(self.start_pos.y(), self.end_pos.y())
+            width = abs(self.end_pos.x() - self.start_pos.x())
+            height = abs(self.end_pos.y() - self.start_pos.y())
+            
+            # Store selection area
+            self.selected_area = self.image_scene.addRect(x, y, width, height, 
+                                                        pen=Qt.red)
+
     def detect_qr_code(self):
         if self.image_path and self.selected_area:
             try:
                 pil_image = Image.open(self.image_path)
-                x = int(self.selected_area.x())
-                y = int(self.selected_area.y())
-                width = int(self.selected_area.width())
-                height = int(self.selected_area.height())
+                rect = self.selected_area.rect()
+                x = max(0, int(rect.x()))
+                y = max(0, int(rect.y()))
+                width = min(pil_image.width - x, int(rect.width()))
+                height = min(pil_image.height - y, int(rect.height()))
+                
                 cropped_image = pil_image.crop((x, y, x + width, y + height))
                 decoded_data = decode(cropped_image)
                 if decoded_data:
